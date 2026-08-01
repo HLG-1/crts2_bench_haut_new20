@@ -1,0 +1,29 @@
+import sys, os
+sys.path.append(".")
+from core.geo_io import auditer_zone, raster_meta
+from core.rasterization import rasterize_hauteur
+from core.tiling import decouper_en_patches
+from core.splits import generer_splits
+
+ZONES = {
+    "zone1": ("data/zone1/01_vec.shp", "data/zone1/01.tif"),
+    "zone2": ("data/zone2/02_vec.shp", "data/zone2/02.tif"),
+    "zone3": ("data/zone3/03_vec.shp", "data/zone3/03.tif"),
+}
+
+if __name__ == "__main__":
+    manifests = {}
+    for zone_name, (shp, tif) in ZONES.items():
+        gdf_reproj, ok = auditer_zone(zone_name, shp, tif)
+        if not ok:
+            raise RuntimeError(f"{zone_name}: pas de chevauchement, arrêt.")
+
+        meta = raster_meta(tif)
+        height_map, valid_mask = rasterize_hauteur(gdf_reproj, meta["transform"], (meta["height"], meta["width"]))
+
+        out_dir = f"data/patches/{zone_name}"
+        manifests[zone_name] = decouper_en_patches(tif, height_map, valid_mask, out_dir, zone_name)
+        print(f"{zone_name}: {len(manifests[zone_name])} patches générés")
+
+    train_val = manifests["zone1"] + manifests["zone2"]
+    generer_splits(train_val, manifests["zone3"], "data/splits")
