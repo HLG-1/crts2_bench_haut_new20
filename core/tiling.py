@@ -1,16 +1,16 @@
 """
-Découpage en tuiles chevauchantes, alignées entre image RGB, carte de
-hauteur et masque de validité. Padding réfléchi sur les bords.
+Découpage en tuiles chevauchantes AVEC rasterisation de la hauteur
+directement par fenêtre — évite de construire une carte pleine échelle
+(qui fait plusieurs Go et fait planter la machine).
 """
 from __future__ import annotations
 import os
 import numpy as np
-import cv2
 from PIL import Image
-from rasterio.windows import Window
+from shapely.geometry import box
 import rasterio
-
-from core.geo_io import read_window_rgb
+from rasterio.windows import Window
+from rasterio.features import rasterize
 
 
 def tile_positions(height: int, width: int, tile_size: int, overlap: int):
@@ -26,8 +26,7 @@ def tile_positions(height: int, width: int, tile_size: int, overlap: int):
 
 def decouper_en_patches(
     tif_path: str,
-    height_map: np.ndarray,
-    valid_mask: np.ndarray,
+    gdf_clean,                 # GeoDataFrame déjà filtré (géométries valides, HAUTEUR > 0)
     out_dir: str,
     zone_name: str,
     tile_size: int = 512,
@@ -35,34 +34,54 @@ def decouper_en_patches(
     min_pixels_batiment: int = 100,
 ):
     os.makedirs(out_dir, exist_ok=True)
-    H, W = valid_mask.shape
-    rows, cols = tile_positions(H, W, tile_size, overlap)
+    sindex = gdf_clean.sindex
 
-    manifest = []
-    compteur = 0
-    for r in rows:
-        for c in cols:
-            mask_crop = valid_mask[r:r+tile_size, c:c+tile_size]
-            if mask_crop.sum() < min_pixels_batiment:
-                continue
+    with rasterio.open(tif_path) as src:
+        H, W, full_transform = src.height, src.width, src.transform
+        rows, cols = tile_positions(H, W, tile_size, overlap)
 
-            window = Window(c, r, tile_size, tile_size)
-            img_crop = read_window_rgb(tif_path, window)
-            gt_crop = height_map[r:r+tile_size, c:c+tile_size]
+        manifest = []
+        compteur = 0
+        for r in rows:
+            for c in cols:
+                window = Window(c, r, tile_size, tile_size)
+                win_transform = rasterio.windows.transform(window, full_transform)
+                bounds = rasterio.windows.bounds(window, full_transform)
 
-            # Padding réfléchi si la tuile déborde (bords de zone)
-            rh, rw = mask_crop.shape
-            if rh < tile_size or rw < tile_size:
-                pad_h, pad_w = tile_size - rh, tile_size - rw
-                img_crop = cv2.copyMakeBorder(img_crop, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT_101)
-                gt_crop = np.pad(gt_crop, ((0, pad_h), (0, pad_w)), mode="reflect")
-                mask_crop = np.pad(mask_crop, ((0, pad_h), (0, pad_w)), mode="reflect")
+                # Ne garder que les polygones qui touchent cette fenêtre (index spatial)
+                candidats = list(sindex.intersection(bounds))
+                if not candidats:
+                    continue
+                subset = gdf_clean.iloc[candidats]
+                subset = subset[subset.geometry.intersects(box(*bounds))]
+                if len(subset) == 0:
+                    continue
 
-            patch_id = f"{zone_name}_{compteur:05d}"
-            Image.fromarray(img_crop).save(f"{out_dir}/{patch_id}_IMG.png")
-            np.save(f"{out_dir}/{patch_id}_height_gt.npy", gt_crop)
-            np.save(f"{out_dir}/{patch_id}_valid_mask.npy", mask_crop)
-            manifest.append(patch_id)
-            compteur += 1
+                shape_hw = (tile_size, tile_size)
+                height_map = np.zeros(shape_hw, dtype=np.float32)
+                valid_mask = np.zeros(shape_hw, dtype=np.uint8)
+
+                # Petits polygones peints en premier (même logique que core CRTS)
+                paires = sorted(zip(subset.geometry, subset["HAUTEUR"]), key=lambda p: p[0].area)
+                for geom, hauteur in paires:
+                    layer = rasterize([(geom, 1)], out_shape=shape_hw, transform=win_transform,
+                                      fill=0, dtype="uint8")
+                    unpainted = (layer > 0) & (valid_mask == 0)
+                    height_map[unpainted] = hauteur
+                    valid_mask[unpainted] = 1
+
+                if valid_mask.sum() < min_pixels_batiment:
+                    continue  # patch sans assez de signal bâtiment, ignoré
+
+                # boundless=True + fill_value=0 : gère automatiquement les bords de zone
+                img_crop = src.read([1, 2, 3], window=window, boundless=True, fill_value=0)
+                img_crop = np.transpose(img_crop, (1, 2, 0)).astype(np.uint8)
+
+                patch_id = f"{zone_name}_{compteur:05d}"
+                Image.fromarray(img_crop).save(f"{out_dir}/{patch_id}_IMG.png")
+                np.save(f"{out_dir}/{patch_id}_height_gt.npy", height_map)
+                np.save(f"{out_dir}/{patch_id}_valid_mask.npy", valid_mask)
+                manifest.append(patch_id)
+                compteur += 1
 
     return manifest

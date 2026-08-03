@@ -6,7 +6,11 @@ from __future__ import annotations
 import numpy as np
 import rasterio.features
 import geopandas as gpd
+"""Nettoyage des géométries avant tuilage (plus de rasterisation pleine échelle ici)."""
 
+
+def nettoyer_gdf(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    return gdf[gdf.geometry.is_valid & (gdf["HAUTEUR"] > 0)].reset_index(drop=True)
 
 def rasterize_hauteur(gdf: gpd.GeoDataFrame, transform, shape_hw: tuple[int, int]):
     """Peint HAUTEUR dans les pixels bâtiment. Petits polygones peints en
