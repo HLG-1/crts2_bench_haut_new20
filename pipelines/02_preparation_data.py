@@ -8,6 +8,8 @@ from core.splits import generer_splits
 
 ZONES = {
     "zone1": ("data/zone1/01_vec.shp", "data/zone1/01.tif"),
+    "zone2": ("data/zone2/02_vec.shp", "data/zone2/02.tif"),
+    "zone3": ("data/zone3/03_vec.shp", "data/zone3/03.tif"),
 }
 
 if __name__ == "__main__":
