@@ -1,0 +1,33 @@
+=== Comparaison Split Actuel vs Nouveau ===
+
+Distribution de hauteurs - Actuel:
+split       test  train   val
+height_bin                   
+0-5m        55.4   67.2  67.9
+5-10m       26.7   24.5  23.2
+10-15m      10.4    3.5   3.8
+15-20m       7.1    4.8   5.1
+20-25m       0.4    0.0   0.0
+
+Distribution de hauteurs - Nouveau:
+split       test  train   val
+height_bin                   
+0-5m        64.8   65.7  63.6
+5-10m       25.0   24.6  24.8
+10-15m       4.4    4.6   6.0
+15-20m       5.9    5.1   5.5
+20-25m       0.0    0.1   0.1
+
+Distribution par zone - Actuel:
+split   test  train   val
+zone                     
+zone1    0.0   31.4  32.4
+zone2    0.0   68.6  67.6
+zone3  100.0    0.0   0.0
+
+Distribution par zone - Nouveau:
+split  test  train   val
+zone                    
+zone1  25.7   25.9  26.5
+zone2  55.7   56.3  55.9
+zone3  18.6   17.8  17.6

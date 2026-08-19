@@ -1,0 +1,2 @@
+modele,MAE,RMSE_B,NMAD,Biais,Erreur_relative,Correlation,Couverture,n_batiments,latence_moy_ms
+DAV2_finetune,1.084,1.701,0.842,-0.573,0.216,0.909,1.0,1428,64.0

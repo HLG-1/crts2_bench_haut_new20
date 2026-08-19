@@ -1,0 +1,18 @@
+# Environnements virtuels
+.venv/
+.venv*/
+venv/
+env/
+
+# Cache Python
+core/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+third_party/
+
+data/
+checkpoints/
+

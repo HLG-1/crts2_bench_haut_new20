@@ -8,10 +8,10 @@ git clone https://github.com/zhu-xlab/HTC-DC-Net.git third_party/HTC-DC-Net
 git clone https://github.com/zhu-xlab/tse-net.git third_party/tse-net
 
 echo "=== Création des environnements virtuels ==="
-python -m venv third_party/ml-depth-pro/venv
-python -m venv third_party/Depth-Anything-V2/venv
-python -m venv third_party/HTC-DC-Net/venv
-python -m venv third_party/tse-net/venv
+python -m venv --system-site-packages third_party/ml-depth-pro/venv
+python -m venv --system-site-packages third_party/Depth-Anything-V2/venv
+python -m venv --system-site-packages third_party/HTC-DC-Net/venv
+python -m venv --system-site-packages third_party/tse-net/venv
 
 echo "=== Installation DepthPro ==="
 source third_party/ml-depth-pro/venv/bin/activate
@@ -28,13 +28,13 @@ deactivate
 echo "=== Installation HTC-DC Net ==="
 source third_party/HTC-DC-Net/venv/bin/activate
 pip install --upgrade pip
-pip install -r third_party/HTC-DC-Net/requirements.txt || echo "ATTENTION: vérifier requirements.txt manuellement"
+pip install -r requirements/htc_dc_net.txt
 deactivate
 
 echo "=== Installation TSE-Net ==="
 source third_party/tse-net/venv/bin/activate
 pip install --upgrade pip
-pip install -r third_party/tse-net/requirements.txt || echo "ATTENTION: vérifier requirements.txt manuellement"
+pip install -r requirements/tse_net.txt
 deactivate
 
 

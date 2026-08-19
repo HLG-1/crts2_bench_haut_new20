@@ -1,0 +1,29 @@
+## Configuration principale pour HTC-DC-Net sur BatimentsMaroc
+model: htcdc
+backbone: efficientnetb0
+project: BatimentsMaroc
+
+## Data configuration
+data_dir: ../../../data/htc_dc_net_format
+data_split_dirs: ../../../data/htc_dc_net_format/splits
+batch_size: 32
+num_workers: 8
+image_size: 256
+crop: null
+use_mask: True
+normalize: True
+
+## Training configuration
+max_epochs: 100
+lr: 0.0001
+chamfer_weight: 0.01
+log_interval: 50
+checkpoint_interval: 10
+patience: 15
+
+optimizer: AdamW
+
+device: cuda
+
+early_stopping: ['mae', 'rmse', 'val/loss_total']
+early_stopping_mode: ['min', 'min', 'min']

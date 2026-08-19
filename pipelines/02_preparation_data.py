@@ -26,5 +26,5 @@ if __name__ == "__main__":
         manifests[zone_name] = decouper_en_patches(tif, gdf_clean, out_dir, zone_name)
         print(f"{zone_name}: {len(manifests[zone_name])} patches générés")
 
-    # train_val = manifests["zone1"] + manifests["zone2"]
-    # generer_splits(train_val, manifests["zone3"], "data/splits")
+    train_val = manifests["zone1"] + manifests["zone2"]
+    generer_splits(train_val, manifests["zone3"], "data/splits")

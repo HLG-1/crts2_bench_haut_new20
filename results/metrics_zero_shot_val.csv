@@ -1,0 +1,3 @@
+modele,MAE,RMSE_B,NMAD,Biais,Erreur_relative,Correlation,Couverture,n_batiments,latence_moy_ms
+DepthPro,2.617,3.601,1.468,-0.021,0.658,0.102,1.0,1569,165.2
+DAV2_zeroshot,2.344,3.194,2.146,-0.051,0.589,0.462,1.0,1569,64.3

@@ -1,0 +1,4 @@
+fvcore>=0.1.5
+timm>=0.9.7
+scikit-image>=0.21.0
+wandb
