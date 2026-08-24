@@ -19,6 +19,8 @@ from rasterio.transform import from_origin
 from PIL import Image
 import torch
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import pandas as pd
 
 from core.data_utils import charger_split, charger_patch
 from core.metrics import calculer_metriques, tableau_comparatif, mesurer_latence
@@ -128,7 +130,7 @@ def convertir_format(split_name: str):
     print(f"{split_name} : {len(patch_ids)} patches convertis")
 
 
-def lancer_entrainement(epochs: int = 200, batch_size: int = 32, use_stratified: bool = True):
+def lancer_entrainement(epochs: int = 200, batch_size: int = 8, use_stratified: bool = True):
     # Utiliser des chemins relatifs depuis le répertoire HTC-DC-Net
     config_rel = os.path.relpath(CONFIG_PATH, HTC_DIR)
     exp_config_rel = os.path.relpath(EXP_CONFIG_PATH, HTC_DIR)
@@ -314,6 +316,477 @@ def inferer_htc(model, img_rgb: np.ndarray) -> np.ndarray:
 
 from tqdm import tqdm
 
+def generer_visualisations_training(results_dir: str):
+    """
+    Génère les visualisations des résultats d'entraînement à partir du training_log.csv
+    """
+    from datetime import datetime
+    
+    log_file = os.path.join(results_dir, "training_log.csv")
+    if not os.path.exists(log_file):
+        print(f"  - Fichier training_log.csv non trouvé dans {results_dir}")
+        return
+    
+    print(f"  - Génération des visualisations depuis {log_file}")
+    
+    # Lire le CSV
+    df = pd.read_csv(log_file)
+    
+    # Fonction pour extraire les valeurs des tenseurs
+    def extract_tensor_value(val):
+        if pd.isna(val):
+            return None
+        if isinstance(val, str):
+            if 'tensor(' in val:
+                try:
+                    # Extraire la valeur numérique du tenseur
+                    match = val.split('tensor(')[1].split(',')[0]
+                    return float(match)
+                except:
+                    return None
+            return None
+        return float(val) if pd.notna(val) else None
+    
+    # Extraire les métriques principales
+    epochs = df['epoch'].values
+    lr = df['lr'].apply(extract_tensor_value).values
+    
+    # Métriques de validation
+    val_loss = df['val/loss_total'].apply(extract_tensor_value).values
+    mae = df['mae'].apply(extract_tensor_value).values
+    mae0 = df['mae0'].apply(extract_tensor_value).values
+    mae8 = df['mae8>0'].apply(extract_tensor_value).values
+    rmse = df['rmse'].apply(extract_tensor_value).values
+    rmse0 = df['rmse0'].apply(extract_tensor_value).values
+    rmse8 = df['rmse8>0'].apply(extract_tensor_value).values
+    
+    # Métriques d'entraînement multi-échelle
+    train_loss_0 = df['train/loss_total_0'].apply(extract_tensor_value).values
+    train_loss_1 = df['train/loss_total_1'].apply(extract_tensor_value).values
+    train_loss_2 = df['train/loss_total_2'].apply(extract_tensor_value).values
+    train_mae_0 = df['train/mae_0'].apply(extract_tensor_value).values
+    train_mae_1 = df['train/mae_1'].apply(extract_tensor_value).values
+    train_mae_2 = df['train/mae_2'].apply(extract_tensor_value).values
+    
+    # Binary Chamfer Distance
+    bin_chamfer_0 = df['train/bin_chamfer_0'].apply(extract_tensor_value).values
+    bin_chamfer_1 = df['train/bin_chamfer_1'].apply(extract_tensor_value).values
+    bin_chamfer_2 = df['train/bin_chamfer_2'].apply(extract_tensor_value).values
+    
+    # Créer le diagramme principal avec 6 sous-graphiques
+    fig, axes = plt.subplots(3, 2, figsize=(16, 12))
+    fig.suptitle('HTC-DC Net Training Results', fontsize=16, fontweight='bold')
+    
+    # 1. Training vs Validation Loss
+    ax1 = axes[0, 0]
+    valid_indices_train = ~np.isnan(train_loss_0)
+    valid_indices_val = ~np.isnan(val_loss)
+    if valid_indices_train.any():
+        ax1.plot(epochs[valid_indices_train], train_loss_0[valid_indices_train], label='Train Loss (Scale 0)', alpha=0.7)
+    if valid_indices_val.any():
+        ax1.plot(epochs[valid_indices_val], val_loss[valid_indices_val], label='Validation Loss', alpha=0.7)
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss')
+    ax1.set_title('Training vs Validation Loss')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. MAE Metrics
+    ax2 = axes[0, 1]
+    valid_indices_mae = ~np.isnan(mae)
+    valid_indices_mae0 = ~np.isnan(mae0)
+    valid_indices_mae8 = ~np.isnan(mae8)
+    if valid_indices_mae.any():
+        ax2.plot(epochs[valid_indices_mae], mae[valid_indices_mae], label='MAE (Global)', linewidth=2)
+    if valid_indices_mae0.any():
+        ax2.plot(epochs[valid_indices_mae0], mae0[valid_indices_mae0], label='MAE (Scale 0)', alpha=0.7)
+    if valid_indices_mae8.any():
+        ax2.plot(epochs[valid_indices_mae8], mae8[valid_indices_mae8], label='MAE (Scale 8>0)', alpha=0.7)
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('MAE (m)')
+    ax2.set_title('MAE Metrics Evolution')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # 3. RMSE Metrics
+    ax3 = axes[1, 0]
+    valid_indices_rmse = ~np.isnan(rmse)
+    valid_indices_rmse0 = ~np.isnan(rmse0)
+    valid_indices_rmse8 = ~np.isnan(rmse8)
+    if valid_indices_rmse.any():
+        ax3.plot(epochs[valid_indices_rmse], rmse[valid_indices_rmse], label='RMSE (Global)', linewidth=2)
+    if valid_indices_rmse0.any():
+        ax3.plot(epochs[valid_indices_rmse0], rmse0[valid_indices_rmse0], label='RMSE (Scale 0)', alpha=0.7)
+    if valid_indices_rmse8.any():
+        ax3.plot(epochs[valid_indices_rmse8], rmse8[valid_indices_rmse8], label='RMSE (Scale 8>0)', alpha=0.7)
+    ax3.set_xlabel('Epoch')
+    ax3.set_ylabel('RMSE (m)')
+    ax3.set_title('RMSE Metrics Evolution')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    # 4. Binary Chamfer Distance per scale
+    ax4 = axes[1, 1]
+    valid_indices_bcd0 = ~np.isnan(bin_chamfer_0)
+    valid_indices_bcd1 = ~np.isnan(bin_chamfer_1)
+    valid_indices_bcd2 = ~np.isnan(bin_chamfer_2)
+    if valid_indices_bcd0.any():
+        ax4.plot(epochs[valid_indices_bcd0], bin_chamfer_0[valid_indices_bcd0], label='Scale 0', alpha=0.7)
+    if valid_indices_bcd1.any():
+        ax4.plot(epochs[valid_indices_bcd1], bin_chamfer_1[valid_indices_bcd1], label='Scale 1', alpha=0.7)
+    if valid_indices_bcd2.any():
+        ax4.plot(epochs[valid_indices_bcd2], bin_chamfer_2[valid_indices_bcd2], label='Scale 2', alpha=0.7)
+    ax4.set_xlabel('Epoch')
+    ax4.set_ylabel('Binary Chamfer Distance')
+    ax4.set_title('Binary Chamfer Distance per Scale')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    
+    # 5. Multi-scale Training Loss
+    ax5 = axes[2, 0]
+    valid_indices_tl0 = ~np.isnan(train_loss_0)
+    valid_indices_tl1 = ~np.isnan(train_loss_1)
+    valid_indices_tl2 = ~np.isnan(train_loss_2)
+    if valid_indices_tl0.any():
+        ax5.plot(epochs[valid_indices_tl0], train_loss_0[valid_indices_tl0], label='Scale 0', alpha=0.7)
+    if valid_indices_tl1.any():
+        ax5.plot(epochs[valid_indices_tl1], train_loss_1[valid_indices_tl1], label='Scale 1', alpha=0.7)
+    if valid_indices_tl2.any():
+        ax5.plot(epochs[valid_indices_tl2], train_loss_2[valid_indices_tl2], label='Scale 2', alpha=0.7)
+    ax5.set_xlabel('Epoch')
+    ax5.set_ylabel('Loss')
+    ax5.set_title('Multi-scale Training Loss')
+    ax5.legend()
+    ax5.grid(True, alpha=0.3)
+    
+    # 6. Multi-scale Training MAE
+    ax6 = axes[2, 1]
+    valid_indices_tm0 = ~np.isnan(train_mae_0)
+    valid_indices_tm1 = ~np.isnan(train_mae_1)
+    valid_indices_tm2 = ~np.isnan(train_mae_2)
+    if valid_indices_tm0.any():
+        ax6.plot(epochs[valid_indices_tm0], train_mae_0[valid_indices_tm0], label='Scale 0', alpha=0.7)
+    if valid_indices_tm1.any():
+        ax6.plot(epochs[valid_indices_tm1], train_mae_1[valid_indices_tm1], label='Scale 1', alpha=0.7)
+    if valid_indices_tm2.any():
+        ax6.plot(epochs[valid_indices_tm2], train_mae_2[valid_indices_tm2], label='Scale 2', alpha=0.7)
+    ax6.set_xlabel('Epoch')
+    ax6.set_ylabel('MAE (m)')
+    ax6.set_title('Multi-scale Training MAE')
+    ax6.legend()
+    ax6.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Sauvegarder le diagramme principal
+    viz_path = os.path.join(results_dir, "training_results_visualization.png")
+    plt.savefig(viz_path, dpi=150, bbox_inches='tight')
+    print(f"  - Diagramme principal sauvegardé: {viz_path}")
+    plt.close()
+    
+    # Créer le diagramme de comparaison
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle('HTC-DC Net Metrics Comparison', fontsize=16, fontweight='bold')
+    
+    # 1. Learning Rate Schedule
+    ax1 = axes[0]
+    valid_indices = ~np.isnan(lr)
+    if valid_indices.any():
+        ax1.plot(epochs[valid_indices], lr[valid_indices], label='Learning Rate', color='purple')
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Learning Rate')
+    ax1.set_title('Learning Rate Schedule')
+    ax1.set_yscale('log')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Initial vs Final Metrics Comparison
+    ax2 = axes[1]
+    metrics_names = ['MAE', 'RMSE', 'Val Loss']
+    initial_values = []
+    final_values = []
+    
+    if len(mae) > 0 and not np.isnan(mae[0]) and not np.isnan(mae[-1]):
+        initial_values.append(mae[0])
+        final_values.append(mae[-1])
+        improvement = ((mae[0] - mae[-1]) / mae[0]) * 100
+        print(f"  - MAE: {mae[0]:.4f} → {mae[-1]:.4f} (amélioration: {improvement:.1f}%)")
+    
+    if len(rmse) > 0 and not np.isnan(rmse[0]) and not np.isnan(rmse[-1]):
+        initial_values.append(rmse[0])
+        final_values.append(rmse[-1])
+        improvement = ((rmse[0] - rmse[-1]) / rmse[0]) * 100
+        print(f"  - RMSE: {rmse[0]:.4f} → {rmse[-1]:.4f} (amélioration: {improvement:.1f}%)")
+    
+    if len(val_loss) > 0 and not np.isnan(val_loss[0]) and not np.isnan(val_loss[-1]):
+        initial_values.append(val_loss[0])
+        final_values.append(val_loss[-1])
+        improvement = ((val_loss[0] - val_loss[-1]) / val_loss[0]) * 100
+        print(f"  - Validation Loss: {val_loss[0]:.4f} → {val_loss[-1]:.4f} (amélioration: {improvement:.1f}%)")
+    
+    if len(initial_values) == len(metrics_names):
+        x = np.arange(len(metrics_names))
+        width = 0.35
+        ax2.bar(x - width/2, initial_values, width, label='Initial', alpha=0.8)
+        ax2.bar(x + width/2, final_values, width, label='Final', alpha=0.8)
+        ax2.set_xlabel('Metrics')
+        ax2.set_ylabel('Value')
+        ax2.set_title('Initial vs Final Metrics')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(metrics_names)
+        ax2.legend()
+        ax2.grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    
+    # Sauvegarder le diagramme de comparaison
+    comp_path = os.path.join(results_dir, "metrics_comparison.png")
+    plt.savefig(comp_path, dpi=150, bbox_inches='tight')
+    print(f"  - Diagramme de comparaison sauvegardé: {comp_path}")
+    plt.close()
+    
+    # Afficher un résumé
+    print(f"\n=== Résumé de l'entraînement ===")
+    print(f"Total Epochs: {len(epochs)}")
+    if len(df['step']) > 0:
+        total_steps = df['step'].apply(extract_tensor_value).sum()
+        print(f"Total Steps: {total_steps}")
+    
+    if len(mae) > 0 and not np.isnan(mae[-1]):
+        print(f"\nFinal Metrics:")
+        print(f"  MAE: {mae[-1]:.4f}")
+        print(f"  RMSE: {rmse[-1]:.4f if len(rmse) > 0 and not np.isnan(rmse[-1]) else 'N/A'}")
+        print(f"  Validation Loss: {val_loss[-1]:.4f if len(val_loss) > 0 and not np.isnan(val_loss[-1]) else 'N/A'}")
+    
+    # Créer et sauvegarder le script de visualisation
+    script_content = '''
+import sys
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def extract_tensor_value(val):
+    if pd.isna(val):
+        return None
+    if isinstance(val, str):
+        if 'tensor(' in val:
+            try:
+                match = val.split('tensor(')[1].split(',')[0]
+                return float(match)
+            except:
+                return None
+        return None
+    return float(val) if pd.notna(val) else None
+
+def generate_visualizations(log_file, output_dir):
+    df = pd.read_csv(log_file)
+    
+    epochs = df['epoch'].values
+    lr = df['lr'].apply(extract_tensor_value).values
+    val_loss = df['val/loss_total'].apply(extract_tensor_value).values
+    mae = df['mae'].apply(extract_tensor_value).values
+    mae0 = df['mae0'].apply(extract_tensor_value).values
+    mae8 = df['mae8>0'].apply(extract_tensor_value).values
+    rmse = df['rmse'].apply(extract_tensor_value).values
+    rmse0 = df['rmse0'].apply(extract_tensor_value).values
+    rmse8 = df['rmse8>0'].apply(extract_tensor_value).values
+    train_loss_0 = df['train/loss_total_0'].apply(extract_tensor_value).values
+    train_loss_1 = df['train/loss_total_1'].apply(extract_tensor_value).values
+    train_loss_2 = df['train/loss_total_2'].apply(extract_tensor_value).values
+    train_mae_0 = df['train/mae_0'].apply(extract_tensor_value).values
+    train_mae_1 = df['train/mae_1'].apply(extract_tensor_value).values
+    train_mae_2 = df['train/mae_2'].apply(extract_tensor_value).values
+    bin_chamfer_0 = df['train/bin_chamfer_0'].apply(extract_tensor_value).values
+    bin_chamfer_1 = df['train/bin_chamfer_1'].apply(extract_tensor_value).values
+    bin_chamfer_2 = df['train/bin_chamfer_2'].apply(extract_tensor_value).values
+    
+    fig, axes = plt.subplots(3, 2, figsize=(16, 12))
+    fig.suptitle('HTC-DC Net Training Results', fontsize=16, fontweight='bold')
+    
+    # 1. Training vs Validation Loss
+    ax1 = axes[0, 0]
+    valid_indices_train = ~np.isnan(train_loss_0)
+    valid_indices_val = ~np.isnan(val_loss)
+    if valid_indices_train.any():
+        ax1.plot(epochs[valid_indices_train], train_loss_0[valid_indices_train], label='Train Loss (Scale 0)', alpha=0.7)
+    if valid_indices_val.any():
+        ax1.plot(epochs[valid_indices_val], val_loss[valid_indices_val], label='Validation Loss', alpha=0.7)
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss')
+    ax1.set_title('Training vs Validation Loss')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. MAE Metrics
+    ax2 = axes[0, 1]
+    valid_indices_mae = ~np.isnan(mae)
+    valid_indices_mae0 = ~np.isnan(mae0)
+    valid_indices_mae8 = ~np.isnan(mae8)
+    if valid_indices_mae.any():
+        ax2.plot(epochs[valid_indices_mae], mae[valid_indices_mae], label='MAE (Global)', linewidth=2)
+    if valid_indices_mae0.any():
+        ax2.plot(epochs[valid_indices_mae0], mae0[valid_indices_mae0], label='MAE (Scale 0)', alpha=0.7)
+    if valid_indices_mae8.any():
+        ax2.plot(epochs[valid_indices_mae8], mae8[valid_indices_mae8], label='MAE (Scale 8>0)', alpha=0.7)
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('MAE (m)')
+    ax2.set_title('MAE Metrics Evolution')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # 3. RMSE Metrics
+    ax3 = axes[1, 0]
+    valid_indices_rmse = ~np.isnan(rmse)
+    valid_indices_rmse0 = ~np.isnan(rmse0)
+    valid_indices_rmse8 = ~np.isnan(rmse8)
+    if valid_indices_rmse.any():
+        ax3.plot(epochs[valid_indices_rmse], rmse[valid_indices_rmse], label='RMSE (Global)', linewidth=2)
+    if valid_indices_rmse0.any():
+        ax3.plot(epochs[valid_indices_rmse0], rmse0[valid_indices_rmse0], label='RMSE (Scale 0)', alpha=0.7)
+    if valid_indices_rmse8.any():
+        ax3.plot(epochs[valid_indices_rmse8], rmse8[valid_indices_rmse8], label='RMSE (Scale 8>0)', alpha=0.7)
+    ax3.set_xlabel('Epoch')
+    ax3.set_ylabel('RMSE (m)')
+    ax3.set_title('RMSE Metrics Evolution')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    # 4. Binary Chamfer Distance per scale
+    ax4 = axes[1, 1]
+    valid_indices_bcd0 = ~np.isnan(bin_chamfer_0)
+    valid_indices_bcd1 = ~np.isnan(bin_chamfer_1)
+    valid_indices_bcd2 = ~np.isnan(bin_chamfer_2)
+    if valid_indices_bcd0.any():
+        ax4.plot(epochs[valid_indices_bcd0], bin_chamfer_0[valid_indices_bcd0], label='Scale 0', alpha=0.7)
+    if valid_indices_bcd1.any():
+        ax4.plot(epochs[valid_indices_bcd1], bin_chamfer_1[valid_indices_bcd1], label='Scale 1', alpha=0.7)
+    if valid_indices_bcd2.any():
+        ax4.plot(epochs[valid_indices_bcd2], bin_chamfer_2[valid_indices_bcd2], label='Scale 2', alpha=0.7)
+    ax4.set_xlabel('Epoch')
+    ax4.set_ylabel('Binary Chamfer Distance')
+    ax4.set_title('Binary Chamfer Distance per Scale')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    
+    # 5. Multi-scale Training Loss
+    ax5 = axes[2, 0]
+    valid_indices_tl0 = ~np.isnan(train_loss_0)
+    valid_indices_tl1 = ~np.isnan(train_loss_1)
+    valid_indices_tl2 = ~np.isnan(train_loss_2)
+    if valid_indices_tl0.any():
+        ax5.plot(epochs[valid_indices_tl0], train_loss_0[valid_indices_tl0], label='Scale 0', alpha=0.7)
+    if valid_indices_tl1.any():
+        ax5.plot(epochs[valid_indices_tl1], train_loss_1[valid_indices_tl1], label='Scale 1', alpha=0.7)
+    if valid_indices_tl2.any():
+        ax5.plot(epochs[valid_indices_tl2], train_loss_2[valid_indices_tl2], label='Scale 2', alpha=0.7)
+    ax5.set_xlabel('Epoch')
+    ax5.set_ylabel('Loss')
+    ax5.set_title('Multi-scale Training Loss')
+    ax5.legend()
+    ax5.grid(True, alpha=0.3)
+    
+    # 6. Multi-scale Training MAE
+    ax6 = axes[2, 1]
+    valid_indices_tm0 = ~np.isnan(train_mae_0)
+    valid_indices_tm1 = ~np.isnan(train_mae_1)
+    valid_indices_tm2 = ~np.isnan(train_mae_2)
+    if valid_indices_tm0.any():
+        ax6.plot(epochs[valid_indices_tm0], train_mae_0[valid_indices_tm0], label='Scale 0', alpha=0.7)
+    if valid_indices_tm1.any():
+        ax6.plot(epochs[valid_indices_tm1], train_mae_1[valid_indices_tm1], label='Scale 1', alpha=0.7)
+    if valid_indices_tm2.any():
+        ax6.plot(epochs[valid_indices_tm2], train_mae_2[valid_indices_tm2], label='Scale 2', alpha=0.7)
+    ax6.set_xlabel('Epoch')
+    ax6.set_ylabel('MAE (m)')
+    ax6.set_title('Multi-scale Training MAE')
+    ax6.legend()
+    ax6.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    viz_path = os.path.join(output_dir, "training_results_visualization.png")
+    plt.savefig(viz_path, dpi=150, bbox_inches='tight')
+    print(f"Diagramme principal sauvegardé: {viz_path}")
+    plt.close()
+    
+    # Diagramme de comparaison
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle('HTC-DC Net Metrics Comparison', fontsize=16, fontweight='bold')
+    
+    # 1. Learning Rate Schedule
+    ax1 = axes[0]
+    valid_indices_lr = ~np.isnan(lr)
+    if valid_indices_lr.any():
+        ax1.plot(epochs[valid_indices_lr], lr[valid_indices_lr], label='Learning Rate', color='purple')
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Learning Rate')
+    ax1.set_title('Learning Rate Schedule')
+    ax1.set_yscale('log')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Initial vs Final Metrics Comparison
+    ax2 = axes[1]
+    metrics_names = ['MAE', 'RMSE', 'Val Loss']
+    initial_values = []
+    final_values = []
+    
+    if len(mae) > 0 and not np.isnan(mae[0]) and not np.isnan(mae[-1]):
+        initial_values.append(mae[0])
+        final_values.append(mae[-1])
+        improvement = ((mae[0] - mae[-1]) / mae[0]) * 100
+        print(f"MAE: {mae[0]:.4f} → {mae[-1]:.4f} (amélioration: {improvement:.1f}%)")
+    
+    if len(rmse) > 0 and not np.isnan(rmse[0]) and not np.isnan(rmse[-1]):
+        initial_values.append(rmse[0])
+        final_values.append(rmse[-1])
+        improvement = ((rmse[0] - rmse[-1]) / rmse[0]) * 100
+        print(f"RMSE: {rmse[0]:.4f} → {rmse[-1]:.4f} (amélioration: {improvement:.1f}%)")
+    
+    if len(val_loss) > 0 and not np.isnan(val_loss[0]) and not np.isnan(val_loss[-1]):
+        initial_values.append(val_loss[0])
+        final_values.append(val_loss[-1])
+        improvement = ((val_loss[0] - val_loss[-1]) / val_loss[0]) * 100
+        print(f"Validation Loss: {val_loss[0]:.4f} → {val_loss[-1]:.4f} (amélioration: {improvement:.1f}%)")
+    
+    if len(initial_values) == len(metrics_names):
+        x = np.arange(len(metrics_names))
+        width = 0.35
+        ax2.bar(x - width/2, initial_values, width, label='Initial', alpha=0.8)
+        ax2.bar(x + width/2, final_values, width, label='Final', alpha=0.8)
+        ax2.set_xlabel('Metrics')
+        ax2.set_ylabel('Value')
+        ax2.set_title('Initial vs Final Metrics')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(metrics_names)
+        ax2.legend()
+        ax2.grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    comp_path = os.path.join(output_dir, "metrics_comparison.png")
+    plt.savefig(comp_path, dpi=150, bbox_inches='tight')
+    print(f"Diagramme de comparaison sauvegardé: {comp_path}")
+    plt.close()
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python visualize_training_results.py <log_file> [output_dir]")
+        sys.exit(1)
+    
+    log_file = sys.argv[1]
+    output_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.dirname(log_file)
+    
+    print(f"Génération des visualisations depuis {log_file}")
+    generate_visualizations(log_file, output_dir)
+    print("Visualisations terminées!")
+'''
+    
+    script_path = os.path.join(results_dir, "visualize_training_results.py")
+    with open(script_path, 'w') as f:
+        f.write(script_content)
+    print(f"  - Script de visualisation sauvegardé: {script_path}")
+
+
 def evaluer_sur_split(model, split_ids: list, split_name: str = "split", save_results: bool = True):
     y_pred, y_true = [], []
     patch_exemple = None
@@ -353,14 +826,15 @@ def evaluer_sur_split(model, split_ids: list, split_name: str = "split", save_re
 
 
 if __name__ == "__main__":
-    print("=== Étape 1 : conversion des données ===")
-    convertir_format("train")
-    convertir_format("val")
-    convertir_format("test")
-    calculer_et_sauvegarder_statistiques()
+    # Étape 1 déjà effectuée - données déjà converties
+    # print("=== Étape 1 : conversion des données ===")
+    # convertir_format("train")
+    # convertir_format("val")
+    # convertir_format("test")
+    # calculer_et_sauvegarder_statistiques()
 
     print("\n=== Étape 2 : entraînement ===")
-    lancer_entrainement(epochs=200, batch_size=32, use_stratified=True)
+    lancer_entrainement(epochs=200, batch_size=8, use_stratified=True)
 
     print("\n=== Étape 3 : évaluation sur validation et test ===")
     val_ids = charger_split("val")
@@ -391,3 +865,7 @@ if __name__ == "__main__":
     np.savez("results/predictions_htc_dc_net_test.npz", y_pred=y_pred_test, y_true=y_true_test)
     np.savez("results/predictions_htc_dc_net.npz", y_pred=y_pred_test, y_true=y_true_test)
     print("\nSauvegardé : metrics et predictions pour validation et test dans results/")
+
+    print("\n=== Étape 4 : génération des visualisations ===")
+    results_dir = "results/htc_dc_net_training"
+    generer_visualisations_training(results_dir)
