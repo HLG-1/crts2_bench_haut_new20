@@ -1,0 +1,5 @@
+# Ignorer les dépôts git embarqués pour éviter les conflits
+.git/
+third_party/Depth-Anything-V2/metric_depth/exp
+
+third_party/HTC-DC-Net/checkpoints

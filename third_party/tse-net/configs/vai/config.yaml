@@ -1,0 +1,43 @@
+augmentation: true
+batch_size: 16
+checkpoint_dir: chkpts/vai/vai02/01
+checkpoint_interval: 100
+data_dir: data/vaihingen/
+data_test: splits/vaihingen/test.txt
+data_train: splits/vaihingen/train0.1.txt
+data_val: splits/vaihingen/val.txt
+device: cuda
+early_stopping:
+- rmse
+early_stopping_mode:
+- min
+experiment_dir: chkpts/vai/vai02/01
+hflip: false
+index: 2
+landcovers:
+- background
+- impervious
+- building
+- lowvegetation
+- tree
+- car
+log_interval: 100
+lr: 0.0001
+max_epochs: 200
+model: tsenet
+name: vai-semi0.1
+normalize: true
+num_landcover: 6
+num_workers: 8
+optimizer: Adam
+patiance: 200
+project: unlabel
+restore: true
+seed: 42
+short: false
+unlabeled_data_dir: data/vaihingen/
+unlabeled_data_train: splits/vaihingen/train0.1_unlabeled.txt
+unlabeled_from_epoch: 0
+update_each_epoch: false
+update_each_inter: true
+wandb_run_id: vai02

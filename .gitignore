@@ -11,8 +11,16 @@ core/__pycache__/
 *.pyd
 .pytest_cache/
 *.egg-info/
-third_party/
+
+# Conserver third_party pour inclure les modifications des dépôts officiels
+# third_party/
 
 data/
 checkpoints/
+results/
 
+third_party/Depth-Anything-V2/metric_depth/exp
+
+third_party/HTC-DC-Net/checkpoints
+
+results/htc_dc_net_training

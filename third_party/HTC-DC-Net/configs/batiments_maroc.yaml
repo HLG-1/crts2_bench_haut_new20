@@ -1,0 +1,45 @@
+## Configuration principale pour HTC-DC-Net sur BatimentsMaroc
+model: htcdc
+backbone: efficientnetb0
+project: BatimentsMaroc
+checkpoint_dir: checkpoints
+use_wandb: false
+
+## Data configuration
+data_dir: ../../data/htc_dc_net_format
+data_split_dirs: ../../data/htc_dc_net_format/splits
+batch_size: 16
+num_workers: 8
+image_size: 256
+crop: null
+use_mask: True
+normalize: True
+
+## Data augmentation
+hflip: true  # Horizontal flip for training
+rotate: 10   # Random rotation +/- 10 degrees
+
+## Training configuration
+max_epochs: 200
+lr: 0.0001
+weight_decay: 0.01  # L2 regularization
+chamfer_weight: 0.01
+log_interval: 50
+checkpoint_interval: 1
+patience: 15
+
+## Learning rate scheduler
+use_scheduler: true
+scheduler_type: cosine  # Cosine annealing
+scheduler_t_max: 50  # Reset every 50 epochs
+scheduler_eta_min: 0.000001  # Minimum learning rate (as float, not string)
+
+## Regularization
+dropout_rate: 0.2  # Dropout rate in decoder
+
+optimizer: AdamW
+
+device: cuda
+
+early_stopping: ['mae', 'rmse', 'val/loss_total']
+early_stopping_mode: ['min', 'min', 'min']
