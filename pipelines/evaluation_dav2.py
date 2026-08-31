@@ -1,9 +1,7 @@
 """
-pipelines/05_evaluation_dav2.py
-
-Script ISOLE pour l'évaluation du modèle DAV2 fine-tuné.
+Script isolé pour l'évaluation du modèle DAV2 fine-tuné.
 Ne relance PAS l'entraînement : réutilise directement le checkpoint
-best.pth déjà sauvegardé (exp/batiments_maroc/best.pth).
+best.pth déjà sauvegardé.
 
 Réutilise les fonctions de 04_finetuning_dav2.py (préparation splits,
 chargement modèle, inférence, éval) via importlib, car le nom du module

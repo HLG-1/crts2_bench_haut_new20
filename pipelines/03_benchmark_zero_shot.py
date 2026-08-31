@@ -1,6 +1,4 @@
 """
-pipelines/03_benchmark_zero_shot.py
-
 Benchmark zero-shot : DepthPro + Depth Anything V2, sans entraînement,
 suivi d'une calibration linéaire simple (profondeur relative -> hauteur).
 

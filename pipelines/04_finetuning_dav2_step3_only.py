@@ -1,6 +1,4 @@
 """
-pipelines/04_finetuning_dav2_step3_only.py
-
 Exécute uniquement l'étape 3 (évaluation) du fine-tuning Depth Anything V2,
 sans refaire l'entraînement. Utile quand l'entraînement est déjà terminé mais
 que l'évaluation a échoué.
@@ -12,7 +10,7 @@ import torch
 from tqdm import tqdm
 
 from core.data_utils import charger_split, charger_patch
-from core.metrics import calculer_metriques, tableau_comparatif, mesurer_latence
+from core.metrics import tableau_comparatif, mesurer_latence
 
 DAV2_DIR = "third_party/Depth-Anything-V2/metric_depth"
 DEFAULT_MAX_DEPTH = 41.0

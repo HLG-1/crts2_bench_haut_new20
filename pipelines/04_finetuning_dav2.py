@@ -1,6 +1,4 @@
 """
-pipelines/04_finetuning_dav2.py
-
 Orchestration du fine-tuning Depth Anything V2 : prépare les splits attendus
 par le repo officiel, lance l'entraînement (via subprocess/torchrun avec early stopping),
 puis évalue le modèle fine-tuné sur zone3.
@@ -12,7 +10,7 @@ import torch
 from tqdm import tqdm
 
 from core.data_utils import charger_split, charger_patch
-from core.metrics import calculer_metriques, tableau_comparatif, mesurer_latence
+from core.metrics import tableau_comparatif, mesurer_latence
 
 DAV2_DIR = "third_party/Depth-Anything-V2/metric_depth"
 DEFAULT_MAX_DEPTH = 41.0

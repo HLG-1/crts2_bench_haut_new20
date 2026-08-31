@@ -1,9 +1,3 @@
-"""
-pipelines/05_train_htc_dc_net.py
-
-Conversion des patches au format image/mask/ndsm attendu par HTC-DC Net,
-lancement de l'entraînement, évaluation sur zone3.
-"""
 import sys, os, subprocess, glob
 from pathlib import Path
 

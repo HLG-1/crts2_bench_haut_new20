@@ -1,6 +1,4 @@
 """
-pipelines/00_exploratory_data_analysis.py
-
 Analyse exploratoire des données d'entraînement avec diagrammes complets :
 - Statistiques descriptives des hauteurs
 - Distribution des hauteurs par zone

@@ -1,6 +1,4 @@
 """
-pipelines/07_evaluation_finale.py
-
 Rassemble les résultats des 4 (ou 5, si zero-shot inclut 2 variantes) CSV
 produits par les scripts 03 à 06, construit le tableau comparatif final,
 la matrice de significativité Wilcoxon, et sauvegarde le rapport complet.
@@ -9,7 +7,7 @@ Nécessite d'avoir aussi accès aux (y_pred, y_true) bruts de chaque modèle,
 pas seulement leurs métriques agrégées, pour le test de Wilcoxon (test
 apparié, a besoin des valeurs par bâtiment, pas juste du résumé). On les
 recharge donc depuis des fichiers .npz sauvegardés par chaque script
-précédent (à ajouter si pas déjà fait — voir note en bas).
+précédent.
 """
 import sys, os
 sys.path.append(".")
