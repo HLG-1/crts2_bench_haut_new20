@@ -64,14 +64,23 @@ def preparer_splits(use_stratified: bool = True):
 
 
 def lancer_entrainement(
-    epochs: int = 100,
-    bs: int = 4,
+    epochs: int = 200,
+    bs: int = 8,
     max_depth: float = DEFAULT_MAX_DEPTH,
     lr: float = 5e-6,
-    patience: int = 8,
+    patience: int = 20,
     metric_early_stop: str = "abs_rel",
     encoder: str = "vitl",
     img_size: int = 518,
+    gradient_accumulation: int = 2,
+    use_multi_loss: bool = True,
+    label_smoothing: float = 0.1,
+    silog_weight: float = 1.0,
+    l1_weight: float = 0.5,
+    gradient_weight: float = 0.3,
+    scale_weight: float = 0.2,
+    dropout_rate: float = 0.1,
+    building_lighting: bool = True,
 ):
     """
     Lance le fine-tuning avec support de l'early stopping (--patience et --metric-early-stop).
@@ -95,7 +104,24 @@ def lancer_entrainement(
         "--pretrained-from", os.path.relpath(CHECKPOINT_PRETRAINE, DAV2_DIR),
         "--save-path", SAVE_PATH,
         "--patches-dir", os.path.relpath("data/patches", DAV2_DIR),
+        "--gradient-accumulation", str(gradient_accumulation),
     ]
+    
+    # Ajouter les paramètres multi-loss si activé
+    if use_multi_loss:
+        cmd.append("--use-multi-loss")
+        cmd.append(f"--label-smoothing={label_smoothing}")
+        cmd.append(f"--silog-weight={silog_weight}")
+        cmd.append(f"--l1-weight={l1_weight}")
+        cmd.append(f"--gradient-weight={gradient_weight}")
+        cmd.append(f"--scale-weight={scale_weight}")
+    
+    # Ajouter le taux de dropout
+    cmd.append(f"--dropout-rate={dropout_rate}")
+    
+    # Ajouter le flag pour les augmentations spécifiques bâtiments
+    if building_lighting:
+        cmd.append("--building-lighting")
     print("Commande :", " ".join(cmd))
     subprocess.run(cmd, cwd=DAV2_DIR, check=True, env=env)
 
@@ -176,6 +202,146 @@ def evaluer_sur_split(model, split_ids: list, split_name: str = "split"):
     return np.array(y_pred), np.array(y_true), patch_exemple
 
 
+def lancer_multi_lr_test(
+    epochs: int = 200,
+    bs: int = 8,
+    max_depth: float = DEFAULT_MAX_DEPTH,
+    patience: int = 20,
+    metric_early_stop: str = "abs_rel",
+    encoder: str = "vitl",
+    img_size: int = 518,
+    gradient_accumulation: int = 2,
+    lr_list: list = [1e-5, 2e-5, 1e-4],
+    use_multi_loss: bool = True,
+    label_smoothing: float = 0.1,
+    silog_weight: float = 1.0,
+    l1_weight: float = 0.5,
+    gradient_weight: float = 0.3,
+    scale_weight: float = 0.2,
+    dropout_rate: float = 0.1,
+    building_lighting: bool = True,
+):
+    """
+    Lance plusieurs entraînements avec différents learning rates et compare les résultats.
+    """
+    global SAVE_PATH
+    resultats_complets = {}
+    
+    for lr in lr_list:
+        print(f"\n{'='*60}")
+        print(f"TESTING LR: {lr}")
+        print(f"{'='*60}")
+        
+        # Modifier le save path pour inclure le LR
+        original_save_path = SAVE_PATH
+        SAVE_PATH = f"exp/batiments_maroc_lr_{lr}"
+        
+        try:
+            lancer_entrainement(
+                epochs=epochs, 
+                bs=bs, 
+                max_depth=max_depth,
+                lr=lr, 
+                patience=patience, 
+                metric_early_stop=metric_early_stop,
+                encoder=encoder, 
+                img_size=img_size,
+                gradient_accumulation=gradient_accumulation,
+                use_multi_loss=use_multi_loss,
+                label_smoothing=label_smoothing,
+                silog_weight=silog_weight,
+                l1_weight=l1_weight,
+                gradient_weight=gradient_weight,
+                scale_weight=scale_weight,
+                dropout_rate=dropout_rate,
+                building_lighting=building_lighting,
+            )
+            
+            # Évaluer le modèle
+            model = charger_modele_finetune(max_depth=max_depth)
+            
+            # Charger les splits (on suppose stratified)
+            val_ids = charger_split("val", splits_dir="results/stratified_split/splits_new")
+            test_ids = charger_split("test", splits_dir="results/stratified_split/splits_new")
+            
+            y_pred_val, y_true_val, _ = evaluer_sur_split(model, val_ids, "val")
+            y_pred_test, y_true_test, patch_ex = evaluer_sur_split(model, test_ids, "test")
+            
+            resultats_complets[f"lr_{lr}"] = {
+                "val": (y_pred_val, y_true_val),
+                "test": (y_pred_test, y_true_test),
+                "patch_exemple": patch_ex
+            }
+            
+            print(f"✓ LR {lr} terminé avec succès")
+            
+        except Exception as e:
+            print(f"✗ LR {lr} échoué: {e}")
+            resultats_complets[f"lr_{lr}"] = None
+        
+        finally:
+            SAVE_PATH = original_save_path
+    
+    return resultats_complets
+
+
+def comparer_resultats_multi_lr(resultats_complets: dict, split_suffix: str = "_stratified"):
+    """
+    Compare les résultats de plusieurs LR tests et génère un tableau comparatif.
+    """
+    resultats_val = {}
+    resultats_test = {}
+    latences = {}
+    
+    for lr_key, data in resultats_complets.items():
+        if data is None:
+            continue
+            
+        model_name = f"DAV2_finetune_{lr_key}"
+        resultats_val[model_name] = data["val"]
+        resultats_test[model_name] = data["test"]
+        
+        # Mesurer latence
+        latences[model_name] = mesurer_latence(
+            lambda img, data=data: inferer_finetune(
+                charger_modele_finetune(checkpoint_path=f"{DAV2_DIR}/exp/batiments_maroc_{lr_key}/best.pth"), 
+                img
+            ), 
+            data["patch_exemple"]
+        )
+    
+    # Générer les tableaux comparatifs
+    tableau_val = tableau_comparatif(resultats_val, latences_par_modele=latences)
+    tableau_test = tableau_comparatif(resultats_test, latences_par_modele=latences)
+    
+    print("\n" + "="*60)
+    print("COMPARAISON VALIDATION (DIFFÉRENTS LR)")
+    print("="*60)
+    print(tableau_val)
+    
+    print("\n" + "="*60)
+    print("COMPARAISON TEST (DIFFÉRENTS LR)")
+    print("="*60)
+    print(tableau_test)
+    
+    # Sauvegarder
+    os.makedirs("results", exist_ok=True)
+    tableau_val.to_csv(f"results/metrics_dav2_multi_lr_val{split_suffix}.csv")
+    tableau_test.to_csv(f"results/metrics_dav2_multi_lr_test{split_suffix}.csv")
+    
+    # Sauvegarder les prédictions pour chaque LR
+    for lr_key, data in resultats_complets.items():
+        if data is None:
+            continue
+        np.savez(f"results/predictions_dav2_{lr_key}_val{split_suffix}.npz", 
+                y_pred=data["val"][0], y_true=data["val"][1])
+        np.savez(f"results/predictions_dav2_{lr_key}_test{split_suffix}.npz", 
+                y_pred=data["test"][0], y_true=data["test"][1])
+    
+    print(f"\n✓ Sauvegardé: résultats multi-LR dans results/")
+    return tableau_val, tableau_test
+
+
 if __name__ == "__main__":
     import argparse
     
@@ -184,14 +350,26 @@ if __name__ == "__main__":
                        help="Utiliser les nouveaux splits stratifiés (défaut: True)")
     parser.add_argument("--use-original", action="store_true", default=False,
                        help="Utiliser les splits originaux au lieu des stratifiés")
-    parser.add_argument("--epochs", type=int, default=100, help="Nombre d'époques (défaut: 100)")
-    parser.add_argument("--patience", type=int, default=8, help="Patience pour early stopping (défaut: 8)")
-    parser.add_argument("--batch-size", type=int, default=4, help="Taille de batch (défaut: 4, recommandé 4 avec GPU partagé)")
+    parser.add_argument("--epochs", type=int, default=200, help="Nombre d'époques (défaut: 200)")
+    parser.add_argument("--patience", type=int, default=20, help="Patience pour early stopping (défaut: 20)")
+    parser.add_argument("--batch-size", type=int, default=8, help="Taille de batch (défaut: 8)")
     parser.add_argument("--lr", type=float, default=5e-6, help="Learning rate (défaut: 5e-6)")
     parser.add_argument("--encoder", type=str, default="vitl", choices=["vits", "vitb", "vitl"], 
                        help="Encodeur ViT (défaut: vitl)")
-    parser.add_argument("--img-size", type=int, default=392, help="Taille d'image (défaut: 392 pour GPU partagé, 518 normal, doit être multiple de 14 pour ViT-L)")
-    parser.add_argument("--gradient-accumulation", type=int, default=1, help="Gradient accumulation steps (défaut: 1)")
+    parser.add_argument("--img-size", type=int, default=518, help="Taille d'image (défaut: 518)")
+    parser.add_argument("--gradient-accumulation", type=int, default=2, help="Gradient accumulation steps (défaut: 2)")
+    parser.add_argument("--multi-lr-test", action="store_true", default=False,
+                       help="Tester plusieurs learning rates (1e-5, 2e-5, 1e-4) et comparer les résultats")
+    parser.add_argument("--use-multi-loss", action="store_true", default=True,
+                       help="Utiliser multi-loss (SiLog + L1 + Gradient + Scale-invariant)")
+    parser.add_argument("--label-smoothing", type=float, default=0.1, help="Label smoothing coefficient (défaut: 0.1)")
+    parser.add_argument("--silog-weight", type=float, default=1.0, help="Poids SiLog loss (défaut: 1.0)")
+    parser.add_argument("--l1-weight", type=float, default=0.5, help="Poids L1 loss (défaut: 0.5)")
+    parser.add_argument("--gradient-weight", type=float, default=0.3, help="Poids Gradient loss (défaut: 0.3)")
+    parser.add_argument("--scale-weight", type=float, default=0.2, help="Poids Scale-invariant loss (défaut: 0.2)")
+    parser.add_argument("--dropout-rate", type=float, default=0.1, help="Taux de dropout (défaut: 0.1)")
+    parser.add_argument("--building-lighting", action="store_true", default=True,
+                       help="Activer les augmentations spécifiques bâtiments (défaut: True)")
     
     args = parser.parse_args()
     
@@ -201,45 +379,76 @@ if __name__ == "__main__":
     print("=== Étape 1 : préparation des splits ===")
     preparer_splits(use_stratified=use_stratified)
 
-    print("\n=== Étape 2 : entraînement avec early stopping ===")
-    lancer_entrainement(epochs=args.epochs, patience=args.patience, 
-                       bs=args.batch_size, lr=args.lr, metric_early_stop="abs_rel",
-                       encoder=args.encoder, img_size=args.img_size)
-
-    print("\n=== Étape 3 : évaluation sur validation et test ===")
-    # Charger les splits depuis le bon répertoire
-    if use_stratified:
-        val_ids = charger_split("val", splits_dir="results/stratified_split/splits_new")
-        test_ids = charger_split("test", splits_dir="results/stratified_split/splits_new")
+    if args.multi_lr_test:
+        print("\n=== MODE MULTI-LR TEST ===")
+        resultats_complets = lancer_multi_lr_test(
+            epochs=args.epochs,
+            bs=args.batch_size,
+            patience=args.patience,
+            encoder=args.encoder,
+            img_size=args.img_size,
+            gradient_accumulation=args.gradient_accumulation,
+            use_multi_loss=args.use_multi_loss,
+            label_smoothing=args.label_smoothing,
+            silog_weight=args.silog_weight,
+            l1_weight=args.l1_weight,
+            gradient_weight=args.gradient_weight,
+            scale_weight=args.scale_weight,
+            dropout_rate=args.dropout_rate,
+            building_lighting=args.building_lighting,
+        )
+        
+        split_suffix = "_stratified" if use_stratified else "_original"
+        comparer_resultats_multi_lr(resultats_complets, split_suffix)
     else:
-        val_ids = charger_split("val")
-        test_ids = charger_split("test")
-    
-    model = charger_modele_finetune()
+        print("\n=== Étape 2 : entraînement avec early stopping ===")
+        lancer_entrainement(epochs=args.epochs, patience=args.patience, 
+                           bs=args.batch_size, lr=args.lr, metric_early_stop="abs_rel",
+                           encoder=args.encoder, img_size=args.img_size,
+                           gradient_accumulation=args.gradient_accumulation,
+                           use_multi_loss=args.use_multi_loss,
+                           label_smoothing=args.label_smoothing,
+                           silog_weight=args.silog_weight,
+                           l1_weight=args.l1_weight,
+                           gradient_weight=args.gradient_weight,
+                           scale_weight=args.scale_weight,
+                           dropout_rate=args.dropout_rate,
+                           building_lighting=args.building_lighting)
 
-    y_pred_val, y_true_val, _ = evaluer_sur_split(model, val_ids, "val")
-    y_pred_test, y_true_test, patch_ex = evaluer_sur_split(model, test_ids, "test")
+        print("\n=== Étape 3 : évaluation sur validation et test ===")
+        # Charger les splits depuis le bon répertoire
+        if use_stratified:
+            val_ids = charger_split("val", splits_dir="results/stratified_split/splits_new")
+            test_ids = charger_split("test", splits_dir="results/stratified_split/splits_new")
+        else:
+            val_ids = charger_split("val")
+            test_ids = charger_split("test")
+        
+        model = charger_modele_finetune()
 
-    resultats_val = {"DAV2_finetune": (y_pred_val, y_true_val)}
-    resultats_test = {"DAV2_finetune": (y_pred_test, y_true_test)}
-    latences = {"DAV2_finetune": mesurer_latence(lambda img: inferer_finetune(model, img), patch_ex)}
+        y_pred_val, y_true_val, _ = evaluer_sur_split(model, val_ids, "val")
+        y_pred_test, y_true_test, patch_ex = evaluer_sur_split(model, test_ids, "test")
 
-    tableau_val = tableau_comparatif(resultats_val, latences_par_modele=latences)
-    tableau_test = tableau_comparatif(resultats_test, latences_par_modele=latences)
+        resultats_val = {"DAV2_finetune": (y_pred_val, y_true_val)}
+        resultats_test = {"DAV2_finetune": (y_pred_test, y_true_test)}
+        latences = {"DAV2_finetune": mesurer_latence(lambda img: inferer_finetune(model, img), patch_ex)}
 
-    print("\n=== RÉSULTATS VALIDATION ===")
-    print(tableau_val)
-    print("\n=== RÉSULTATS TEST ===")
-    print(tableau_test)
+        tableau_val = tableau_comparatif(resultats_val, latences_par_modele=latences)
+        tableau_test = tableau_comparatif(resultats_test, latences_par_modele=latences)
 
-    # Sauvegarder avec un nom de fichier indiquant le type de split utilisé
-    split_suffix = "_stratified" if use_stratified else "_original"
-    os.makedirs("results", exist_ok=True)
-    tableau_val.to_csv(f"results/metrics_dav2_finetune_val{split_suffix}.csv")
-    tableau_test.to_csv(f"results/metrics_dav2_finetune_test{split_suffix}.csv")
-    tableau_test.to_csv(f"results/metrics_dav2_finetune{split_suffix}.csv")
+        print("\n=== RÉSULTATS VALIDATION ===")
+        print(tableau_val)
+        print("\n=== RÉSULTATS TEST ===")
+        print(tableau_test)
 
-    np.savez(f"results/predictions_dav2_finetune_val{split_suffix}.npz", y_pred=y_pred_val, y_true=y_true_val)
-    np.savez(f"results/predictions_dav2_finetune_test{split_suffix}.npz", y_pred=y_pred_test, y_true=y_true_test)
-    np.savez(f"results/predictions_dav2_finetune{split_suffix}.npz", y_pred=y_pred_test, y_true=y_true_test)
-    print(f"\nSauvegardé : metrics et predictions pour validation et test dans results/ (suffixe: {split_suffix})")
+        # Sauvegarder avec un nom de fichier indiquant le type de split utilisé
+        split_suffix = "_stratified" if use_stratified else "_original"
+        os.makedirs("results", exist_ok=True)
+        tableau_val.to_csv(f"results/metrics_dav2_finetune_val{split_suffix}.csv")
+        tableau_test.to_csv(f"results/metrics_dav2_finetune_test{split_suffix}.csv")
+        tableau_test.to_csv(f"results/metrics_dav2_finetune{split_suffix}.csv")
+
+        np.savez(f"results/predictions_dav2_finetune_val{split_suffix}.npz", y_pred=y_pred_val, y_true=y_true_val)
+        np.savez(f"results/predictions_dav2_finetune_test{split_suffix}.npz", y_pred=y_pred_test, y_true=y_true_test)
+        np.savez(f"results/predictions_dav2_finetune{split_suffix}.npz", y_pred=y_pred_test, y_true=y_true_test)
+        print(f"\nSauvegardé : metrics et predictions pour validation et test dans results/ (suffixe: {split_suffix})")

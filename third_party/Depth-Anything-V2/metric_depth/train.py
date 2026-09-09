@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 from dataset.batiments_maroc import BatimentsMarocDataset
 from depth_anything_v2.dpt import DepthAnythingV2
 from util.dist_helper import setup_distributed
-from util.loss import SiLogLoss
+from util.loss import SiLogLoss, MultiLoss
 from util.metric import eval_depth
 from util.utils import init_log
 
@@ -39,6 +39,15 @@ parser.add_argument('--port', default=None, type=int)
 parser.add_argument('--patches-dir', type=str, default='data/patches')
 parser.add_argument('--patience', default=8, type=int)
 parser.add_argument('--metric-early-stop', default='abs_rel', type=str, choices=['abs_rel', 'rmse', 'silog'])
+parser.add_argument('--gradient-accumulation', default=1, type=int, help='Gradient accumulation steps')
+parser.add_argument('--use-multi-loss', action='store_true', default=False, help='Use multi-loss (SiLog + L1 + Gradient + Scale-invariant)')
+parser.add_argument('--label-smoothing', default=0.0, type=float, help='Label smoothing coefficient')
+parser.add_argument('--silog-weight', default=1.0, type=float, help='Weight for SiLog loss in multi-loss')
+parser.add_argument('--l1-weight', default=0.5, type=float, help='Weight for L1 loss in multi-loss')
+parser.add_argument('--gradient-weight', default=0.3, type=float, help='Weight for Gradient loss in multi-loss')
+parser.add_argument('--scale-weight', default=0.2, type=float, help='Weight for Scale-invariant loss in multi-loss')
+parser.add_argument('--dropout-rate', default=0.1, type=float, help='Dropout rate for regularization')
+parser.add_argument('--building-lighting', action='store_true', default=True, help='Use building-specific lighting augmentations')
 
 
 def main():
@@ -66,6 +75,7 @@ def main():
         trainset = BatimentsMarocDataset(
             'dataset/splits/batiments_maroc/train.txt',
             patches_dir=args.patches_dir, size=size, is_train=True,
+            building_lighting=args.building_lighting,
         )
     else:
         raise NotImplementedError
@@ -91,7 +101,7 @@ def main():
         'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
         'vitg': {'encoder': 'vitg', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
-    model = DepthAnythingV2(**{**model_configs[args.encoder], 'max_depth': args.max_depth})
+    model = DepthAnythingV2(**{**model_configs[args.encoder], 'max_depth': args.max_depth, 'dropout_rate': args.dropout_rate})
 
     if args.pretrained_from:
         model.load_state_dict({k: v for k, v in torch.load(args.pretrained_from, map_location='cpu').items() if 'pretrained' in k}, strict=False)
@@ -101,13 +111,24 @@ def main():
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], broadcast_buffers=False,
                                                       output_device=local_rank, find_unused_parameters=True)
 
-    criterion = SiLogLoss().cuda(local_rank)
+    # Choisir la loss fonction
+    if args.use_multi_loss:
+        criterion = MultiLoss(
+            silog_weight=args.silog_weight,
+            l1_weight=args.l1_weight,
+            gradient_weight=args.gradient_weight,
+            scale_weight=args.scale_weight,
+            label_smoothing=args.label_smoothing,
+        ).cuda(local_rank)
+    else:
+        criterion = SiLogLoss(label_smoothing=args.label_smoothing).cuda(local_rank)
 
     optimizer = AdamW([{'params': [param for name, param in model.named_parameters() if 'pretrained' in name], 'lr': args.lr},
                        {'params': [param for name, param in model.named_parameters() if 'pretrained' not in name], 'lr': args.lr * 10.0}],
                       lr=args.lr, betas=(0.9, 0.999), weight_decay=0.01)
 
     total_iters = args.epochs * len(trainloader)
+    effective_batch_size = args.bs * args.gradient_accumulation
 
     previous_best = {'d1': 0, 'd2': 0, 'd3': 0, 'abs_rel': 100, 'sq_rel': 100, 'rmse': 100, 'rmse_log': 100, 'log10': 100, 'silog': 100}
 
@@ -126,20 +147,25 @@ def main():
 
         model.train()
         total_loss = 0
+        optimizer.zero_grad()
 
         for i, sample in enumerate(trainloader):
-            optimizer.zero_grad()
-
             img, depth, valid_mask = sample['image'].cuda(), sample['depth'].cuda(), sample['valid_mask'].cuda()
 
             pred = model(img)
 
             loss = criterion(pred, depth, (valid_mask == 1) & (depth >= args.min_depth) & (depth <= args.max_depth))
-
+            
+            # Normaliser la loss pour l'accumulation de gradient
+            loss = loss / args.gradient_accumulation
+            
             loss.backward()
-            optimizer.step()
+            total_loss += loss.item() * args.gradient_accumulation
 
-            total_loss += loss.item()
+            # Step optimizer après accumulation
+            if (i + 1) % args.gradient_accumulation == 0:
+                optimizer.step()
+                optimizer.zero_grad()
 
             iters = epoch * len(trainloader) + i
 
@@ -149,10 +175,12 @@ def main():
             optimizer.param_groups[1]["lr"] = lr * 10.0
 
             if rank == 0:
-                writer.add_scalar('train/loss', loss.item(), iters)
+                writer.add_scalar('train/loss', loss.item() * args.gradient_accumulation, iters)
 
             if rank == 0 and i % 100 == 0:
-                logger.info('Iter: {}/{}, LR: {:.7f}, Loss: {:.3f}'.format(i, len(trainloader), optimizer.param_groups[0]['lr'], loss.item()))
+                logger.info('Iter: {}/{}, LR: {:.7f}, Loss: {:.3f}, Eff BS: {}'.format(
+                    i, len(trainloader), optimizer.param_groups[0]['lr'], 
+                    loss.item() * args.gradient_accumulation, effective_batch_size))
 
         model.eval()
 

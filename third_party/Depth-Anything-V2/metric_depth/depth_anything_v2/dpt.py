@@ -42,11 +42,13 @@ class DPTHead(nn.Module):
         features=256, 
         use_bn=False, 
         out_channels=[256, 512, 1024, 1024], 
-        use_clstoken=False
+        use_clstoken=False,
+        dropout_rate=0.1
     ):
         super(DPTHead, self).__init__()
         
         self.use_clstoken = use_clstoken
+        self.dropout_rate = dropout_rate
         
         self.projects = nn.ModuleList([
             nn.Conv2d(
@@ -105,10 +107,14 @@ class DPTHead(nn.Module):
         head_features_1 = features
         head_features_2 = 32
         
-        self.scratch.output_conv1 = nn.Conv2d(head_features_1, head_features_1 // 2, kernel_size=3, stride=1, padding=1)
+        self.scratch.output_conv1 = nn.Sequential(
+            nn.Conv2d(head_features_1, head_features_1 // 2, kernel_size=3, stride=1, padding=1),
+            nn.Dropout2d(p=dropout_rate) if dropout_rate > 0 else nn.Identity()
+        )
         self.scratch.output_conv2 = nn.Sequential(
             nn.Conv2d(head_features_1 // 2, head_features_2, kernel_size=3, stride=1, padding=1),
             nn.ReLU(True),
+            nn.Dropout2d(p=dropout_rate) if dropout_rate > 0 else nn.Identity(),
             nn.Conv2d(head_features_2, 1, kernel_size=1, stride=1, padding=0),
             nn.Sigmoid()
         )
@@ -157,7 +163,8 @@ class DepthAnythingV2(nn.Module):
         out_channels=[256, 512, 1024, 1024], 
         use_bn=False, 
         use_clstoken=False,
-        max_depth=20.0
+        max_depth=20.0,
+        dropout_rate=0.1
     ):
         super(DepthAnythingV2, self).__init__()
         
@@ -173,7 +180,7 @@ class DepthAnythingV2(nn.Module):
         self.encoder = encoder
         self.pretrained = DINOv2(model_name=encoder)
         
-        self.depth_head = DPTHead(self.pretrained.embed_dim, features, use_bn, out_channels=out_channels, use_clstoken=use_clstoken)
+        self.depth_head = DPTHead(self.pretrained.embed_dim, features, use_bn, out_channels=out_channels, use_clstoken=use_clstoken, dropout_rate=dropout_rate)
     
     def forward(self, x):
         patch_h, patch_w = x.shape[-2] // 14, x.shape[-1] // 14

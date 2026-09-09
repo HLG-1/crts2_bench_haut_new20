@@ -62,6 +62,7 @@ def get_train_transforms(
     blur: bool = True,
     shadow_simulation: bool = True,
     cutout: bool = True,
+    building_lighting: bool = True,
 ) -> A.Compose:
     """
     Transforms d'entraînement. Applique une géométrie cohérente à
@@ -105,7 +106,8 @@ def get_train_transforms(
             ], p=0.3)
         )
 
-    if shadow_simulation:
+    if shadow_simulation and not building_lighting:
+        # Si building_lighting est activé, les ombres sont incluses dedans
         transforms.append(
             A.RandomShadow(
                 shadow_roi=(0, 0.5, 1, 1),
@@ -128,6 +130,24 @@ def get_train_transforms(
                 fill=0, fill_mask=0, p=0.3,
             )
         )
+    
+    # ---- Augmentations spécifiques bâtiments (éclairage) ----
+    if building_lighting:
+        # Simuler différentes conditions d'éclairage pour les bâtiments
+        transforms += [
+            # Simulation de lumière forte/sunrise/sunset
+            A.RandomBrightnessContrast(brightness_limit=(-0.3, 0.3), contrast_limit=(-0.2, 0.2), p=0.4),
+            # Simulation de différentes températures de couleur
+            A.RGBShift(r_shift_limit=(-20, 20), g_shift_limit=(-20, 20), b_shift_limit=(-20, 20), p=0.3),
+            # Simulation d'ombres architecturales
+            A.RandomShadow(
+                shadow_roi=(0, 0, 1, 1),
+                num_shadows_limit=(1, 3),
+                shadow_dimension=8, p=0.4,
+            ),
+            # Simulation de conditions de faible luminosité
+            A.RandomBrightnessContrast(brightness_limit=(-0.4, -0.1), contrast_limit=0, p=0.2),
+        ]
 
     # Filet de sécurité : garantit la taille de sortie quoi qu'il arrive en amont
     # (protège contre une future modification qui réintroduirait un resize

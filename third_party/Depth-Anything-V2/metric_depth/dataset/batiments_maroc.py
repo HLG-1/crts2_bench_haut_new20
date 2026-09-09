@@ -11,13 +11,14 @@ from .augmentations_depth import get_train_transforms, get_val_transforms, apply
 
 
 class BatimentsMarocDataset(Dataset):
-    def __init__(self, list_file, patches_dir, size=(518, 518), is_train=True):
+    def __init__(self, list_file, patches_dir, size=(518, 518), is_train=True, building_lighting=True):
         """
         Args:
             list_file: chemin vers le fichier de split (train.txt, val.txt, test.txt)
             patches_dir: répertoire contenant les patches
             size: taille de sortie (H, W)
             is_train: si True, applique les augmentations d'entraînement; sinon validation/test
+            building_lighting: si True, applique les augmentations spécifiques bâtiments (éclairage)
         """
         with open(list_file) as f:
             self.ids = [l.strip() for l in f if l.strip()]
@@ -26,7 +27,7 @@ class BatimentsMarocDataset(Dataset):
         self.is_train = is_train
 
         if is_train:
-            self.transform = get_train_transforms(image_size=size)
+            self.transform = get_train_transforms(image_size=size, building_lighting=building_lighting)
         else:
             self.transform = get_val_transforms(image_size=size)
 
