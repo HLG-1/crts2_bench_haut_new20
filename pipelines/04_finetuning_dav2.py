@@ -10,6 +10,10 @@ sys.path.append(".")
 import numpy as np
 import torch
 from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')  # Backend non-interactif pour sauvegarder les plots sans affichage
+import matplotlib.pyplot as plt
+import pandas as pd
 
 from core.data_utils import charger_split, charger_patch
 from core.metrics import calculer_metriques, tableau_comparatif, mesurer_latence
@@ -65,13 +69,13 @@ def preparer_splits(use_stratified: bool = True):
 
 def lancer_entrainement(
     epochs: int = 200,
-    bs: int = 8,
+    bs: int = 4,
     max_depth: float = DEFAULT_MAX_DEPTH,
     lr: float = 5e-6,
     patience: int = 20,
     metric_early_stop: str = "abs_rel",
     encoder: str = "vitl",
-    img_size: int = 518,
+    img_size: int = 392,
     gradient_accumulation: int = 2,
     use_multi_loss: bool = True,
     label_smoothing: float = 0.1,
@@ -81,6 +85,7 @@ def lancer_entrainement(
     scale_weight: float = 0.2,
     dropout_rate: float = 0.1,
     building_lighting: bool = True,
+    custom_port: int = 29500,
 ):
     """
     Lance le fine-tuning avec support de l'early stopping (--patience et --metric-early-stop).
@@ -90,7 +95,7 @@ def lancer_entrainement(
     env['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
     
     cmd = [
-        "torchrun", "--nproc_per_node=1", "--master_port=29500", "train.py",
+        "torchrun", "--nproc_per_node=1", "--master_port", str(custom_port), "train.py",
         "--encoder", encoder,
         "--dataset", "batiments_maroc",
         "--img-size", str(img_size),
@@ -204,12 +209,12 @@ def evaluer_sur_split(model, split_ids: list, split_name: str = "split"):
 
 def lancer_multi_lr_test(
     epochs: int = 200,
-    bs: int = 8,
+    bs: int = 4,
     max_depth: float = DEFAULT_MAX_DEPTH,
     patience: int = 20,
     metric_early_stop: str = "abs_rel",
     encoder: str = "vitl",
-    img_size: int = 518,
+    img_size: int = 392,
     gradient_accumulation: int = 2,
     lr_list: list = [1e-5, 2e-5, 1e-4],
     use_multi_loss: bool = True,
@@ -220,6 +225,7 @@ def lancer_multi_lr_test(
     scale_weight: float = 0.2,
     dropout_rate: float = 0.1,
     building_lighting: bool = True,
+    base_port: int = 29500,
 ):
     """
     Lance plusieurs entraînements avec différents learning rates et compare les résultats.
@@ -227,7 +233,7 @@ def lancer_multi_lr_test(
     global SAVE_PATH
     resultats_complets = {}
     
-    for lr in lr_list:
+    for idx, lr in enumerate(lr_list):
         print(f"\n{'='*60}")
         print(f"TESTING LR: {lr}")
         print(f"{'='*60}")
@@ -235,6 +241,9 @@ def lancer_multi_lr_test(
         # Modifier le save path pour inclure le LR
         original_save_path = SAVE_PATH
         SAVE_PATH = f"exp/batiments_maroc_lr_{lr}"
+        
+        # Utiliser un port différent pour chaque LR
+        current_port = base_port + idx
         
         try:
             lancer_entrainement(
@@ -255,6 +264,7 @@ def lancer_multi_lr_test(
                 scale_weight=scale_weight,
                 dropout_rate=dropout_rate,
                 building_lighting=building_lighting,
+                custom_port=current_port,
             )
             
             # Évaluer le modèle
@@ -287,14 +297,17 @@ def lancer_multi_lr_test(
 
 def comparer_resultats_multi_lr(resultats_complets: dict, split_suffix: str = "_stratified"):
     """
-    Compare les résultats de plusieurs LR tests et génère un tableau comparatif.
+    Compare les résultats de plusieurs LR tests et génère un tableau comparatif et des diagrammes.
     """
     resultats_val = {}
     resultats_test = {}
     latences = {}
     
+    successful_runs = 0
+    
     for lr_key, data in resultats_complets.items():
         if data is None:
+            print(f"⚠ Skipping {lr_key} - no results available")
             continue
             
         model_name = f"DAV2_finetune_{lr_key}"
@@ -309,6 +322,11 @@ def comparer_resultats_multi_lr(resultats_complets: dict, split_suffix: str = "_
             ), 
             data["patch_exemple"]
         )
+        successful_runs += 1
+    
+    if successful_runs == 0:
+        print("❌ Aucun entraînement n'a réussi. Impossible de générer les comparaisons.")
+        return None, None
     
     # Générer les tableaux comparatifs
     tableau_val = tableau_comparatif(resultats_val, latences_par_modele=latences)
@@ -338,8 +356,171 @@ def comparer_resultats_multi_lr(resultats_complets: dict, split_suffix: str = "_
         np.savez(f"results/predictions_dav2_{lr_key}_test{split_suffix}.npz", 
                 y_pred=data["test"][0], y_true=data["test"][1])
     
-    print(f"\n✓ Sauvegardé: résultats multi-LR dans results/")
+    # Générer les diagrammes de comparaison seulement si on a des résultats
+    if successful_runs > 0:
+        generer_diagrammes_comparaison(tableau_val, tableau_test, resultats_complets, split_suffix)
+    
+    print(f"\n✓ Sauvegardé: résultats multi-LR et diagrammes dans results/")
     return tableau_val, tableau_test
+
+
+def generer_diagrammes_comparaison(tableau_val: pd.DataFrame, tableau_test: pd.DataFrame, 
+                                   resultats_complets: dict, split_suffix: str):
+    """
+    Génère des diagrammes visuels pour comparer les performances entre différents LR.
+    """
+    os.makedirs("results/plots", exist_ok=True)
+    
+    # Extraire les noms de modèles (sans le préfixe DAV2_finetune_)
+    lr_names = [name.replace("DAV2_finetune_", "") for name in tableau_val.index if "lr_" in name]
+    
+    # Diagramme 1: Comparaison des métriques principales (Test)
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    fig.suptitle('Comparaison des Learning Rates - Dataset Test', fontsize=16, fontweight='bold')
+    
+    # Métriques principales
+    metrics_to_plot = ['abs_rel', 'rmse', 'delta1', 'latence_ms']
+    metric_labels = ['Abs Rel', 'RMSE (m)', 'δ1 (%)', 'Latence (ms)']
+    
+    for idx, (metric, label) in enumerate(zip(metrics_to_plot, metric_labels)):
+        ax = axes[idx // 2, idx % 2]
+        
+        if metric in tableau_test.columns:
+            values = tableau_test.loc[[f"DAV2_finetune_{lr}" for lr in lr_names], metric].values
+            colors = ['#FF6B6B', '#4ECDC4', '#45B7D1']
+            bars = ax.bar(lr_names, values, color=colors[:len(lr_names)])
+            
+            # Ajouter les valeurs sur les barres
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{height:.4f}' if metric != 'delta1' else f'{height:.2f}',
+                       ha='center', va='bottom', fontsize=10)
+            
+            ax.set_ylabel(label, fontsize=12)
+            ax.set_xlabel('Learning Rate', fontsize=12)
+            ax.set_title(f'{label} par Learning Rate', fontsize=11, fontweight='bold')
+            ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(f'results/plots/comparaison_lr_test{split_suffix}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Diagramme 2: Comparaison Validation vs Test
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig.suptitle('Validation vs Test par Learning Rate', fontsize=16, fontweight='bold')
+    
+    for idx, metric in enumerate(['abs_rel', 'rmse']):
+        ax = axes[idx]
+        
+        val_values = tableau_val.loc[[f"DAV2_finetune_{lr}" for lr in lr_names], metric].values
+        test_values = tableau_test.loc[[f"DAV2_finetune_{lr}" for lr in lr_names], metric].values
+        
+        x = np.arange(len(lr_names))
+        width = 0.35
+        
+        bars1 = ax.bar(x - width/2, val_values, width, label='Validation', color='#4ECDC4')
+        bars2 = ax.bar(x + width/2, test_values, width, label='Test', color='#FF6B6B')
+        
+        # Ajouter les valeurs
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{height:.4f}',
+                       ha='center', va='bottom', fontsize=9)
+        
+        ax.set_ylabel(metric.upper(), fontsize=12)
+        ax.set_xlabel('Learning Rate', fontsize=12)
+        ax.set_title(f'{metric.upper()}: Validation vs Test', fontsize=11, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(lr_names)
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(f'results/plots/comparaison_val_test{split_suffix}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Diagramme 3: Scatter plots Pred vs True pour chaque LR
+    fig, axes = plt.subplots(1, len(lr_names), figsize=(6*len(lr_names), 5))
+    if len(lr_names) == 1:
+        axes = [axes]
+    
+    fig.suptitle('Prédictions vs Vérité Terrain par Learning Rate', fontsize=16, fontweight='bold')
+    
+    for idx, lr_key in enumerate(lr_names):
+        ax = axes[idx]
+        data = resultats_complets[lr_key]
+        if data is None:
+            continue
+            
+        y_pred, y_true = data["test"]
+        
+        # Scatter plot
+        ax.scatter(y_true, y_pred, alpha=0.5, s=20, color='#45B7D1')
+        
+        # Line parfaite
+        min_val = min(y_true.min(), y_pred.min())
+        max_val = max(y_true.max(), y_pred.max())
+        ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Parfait')
+        
+        # Calculer R²
+        r2 = np.corrcoef(y_true, y_pred)[0, 1]**2
+        
+        ax.set_xlabel('Vérité Terrain (m)', fontsize=11)
+        ax.set_ylabel('Prédictions (m)', fontsize=11)
+        ax.set_title(f'LR: {lr_key}\nR² = {r2:.4f}', fontsize=12, fontweight='bold')
+        ax.legend()
+        ax.grid(alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(f'results/plots/scatter_pred_true{split_suffix}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Diagramme 4: Radar chart des métriques
+    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+    
+    # Normaliser les métriques pour le radar chart (inverser les métriques d'erreur)
+    metrics_for_radar = ['abs_rel', 'rmse', 'delta1', 'silog']
+    normalized_data = {}
+    
+    for lr_key in lr_names:
+        row = tableau_test.loc[f"DAV2_finetune_{lr_key}"]
+        normalized_data[lr_key] = [
+            1 - (row['abs_rel'] / tableau_test['abs_rel'].max()),  # Inverser
+            1 - (row['rmse'] / tableau_test['rmse'].max()),        # Inverser
+            row['delta1'] / tableau_test['delta1'].max(),           # Normaliser
+            1 - (row['silog'] / tableau_test['silog'].max())       # Inverser
+        ]
+    
+    # Configuration du radar chart
+    angles = np.linspace(0, 2 * np.pi, len(metrics_for_radar), endpoint=False).tolist()
+    angles += angles[:1]  # Fermer le cercle
+    
+    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1']
+    
+    for idx, lr_key in enumerate(lr_names):
+        values = normalized_data[lr_key]
+        values += values[:1]  # Fermer le cercle
+        
+        ax.plot(angles, values, 'o-', linewidth=2, label=lr_key, color=colors[idx])
+        ax.fill(angles, values, alpha=0.15, color=colors[idx])
+    
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(['Abs Rel', 'RMSE', 'δ1', 'SiLog'], fontsize=11)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
+    ax.set_yticklabels(['0.2', '0.4', '0.6', '0.8', '1.0'], fontsize=9)
+    ax.set_title('Radar des Performances (Normalisé)', fontsize=14, fontweight='bold', pad=20)
+    ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
+    ax.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig(f'results/plots/radar_performance{split_suffix}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"✓ Diagrammes générés dans results/plots/")
 
 
 if __name__ == "__main__":
@@ -352,11 +533,11 @@ if __name__ == "__main__":
                        help="Utiliser les splits originaux au lieu des stratifiés")
     parser.add_argument("--epochs", type=int, default=200, help="Nombre d'époques (défaut: 200)")
     parser.add_argument("--patience", type=int, default=20, help="Patience pour early stopping (défaut: 20)")
-    parser.add_argument("--batch-size", type=int, default=8, help="Taille de batch (défaut: 8)")
+    parser.add_argument("--batch-size", type=int, default=4, help="Taille de batch (défaut: 4 pour économiser la mémoire)")
     parser.add_argument("--lr", type=float, default=5e-6, help="Learning rate (défaut: 5e-6)")
     parser.add_argument("--encoder", type=str, default="vitl", choices=["vits", "vitb", "vitl"], 
                        help="Encodeur ViT (défaut: vitl)")
-    parser.add_argument("--img-size", type=int, default=518, help="Taille d'image (défaut: 518)")
+    parser.add_argument("--img-size", type=int, default=392, help="Taille d'image (défaut: 392 pour économiser la mémoire)")
     parser.add_argument("--gradient-accumulation", type=int, default=2, help="Gradient accumulation steps (défaut: 2)")
     parser.add_argument("--multi-lr-test", action="store_true", default=False,
                        help="Tester plusieurs learning rates (1e-5, 2e-5, 1e-4) et comparer les résultats")
@@ -396,6 +577,7 @@ if __name__ == "__main__":
             scale_weight=args.scale_weight,
             dropout_rate=args.dropout_rate,
             building_lighting=args.building_lighting,
+            base_port=29500,
         )
         
         split_suffix = "_stratified" if use_stratified else "_original"
@@ -413,7 +595,8 @@ if __name__ == "__main__":
                            gradient_weight=args.gradient_weight,
                            scale_weight=args.scale_weight,
                            dropout_rate=args.dropout_rate,
-                           building_lighting=args.building_lighting)
+                           building_lighting=args.building_lighting,
+                           custom_port=29500)
 
         print("\n=== Étape 3 : évaluation sur validation et test ===")
         # Charger les splits depuis le bon répertoire
